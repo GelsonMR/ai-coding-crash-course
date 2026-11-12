@@ -1,13 +1,22 @@
 import { Link } from "react-router";
 import type { Route } from "./+types/instructor";
 import { getCoursesByInstructor, getLessonCountForCourse } from "~/services/courseService";
-import { getEnrollmentCountForCourse } from "~/services/enrollmentService";
+import { getInstructorAnalytics } from "~/services/analyticsService";
 import { getCurrentUserId } from "~/lib/session";
 import { getUserById } from "~/services/userService";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
-import { AlertTriangle, BookOpen, GraduationCap, Plus, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  BookOpen,
+  DollarSign,
+  GraduationCap,
+  Plus,
+  Users,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { formatPrice } from "~/lib/utils";
 import { CourseImage } from "~/components/course-image";
 import { data, isRouteErrorResponse } from "react-router";
 import { CourseStatus, UserRole } from "~/db/schema";
@@ -37,10 +46,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   const instructorCourses = getCoursesByInstructor(currentUserId);
+  const analytics = getInstructorAnalytics(currentUserId);
 
   const coursesWithStats = instructorCourses.map((course) => {
     const lessonCount = getLessonCountForCourse(course.id);
-    const enrollmentCount = getEnrollmentCountForCourse(course.id);
+    const stats = analytics.byCourse[course.id];
 
     return {
       id: course.id,
@@ -50,13 +60,63 @@ export async function loader({ request }: Route.LoaderArgs) {
       status: course.status,
       coverImageUrl: course.coverImageUrl,
       lessonCount,
-      enrollmentCount,
+      ...stats,
       createdAt: course.createdAt,
       updatedAt: course.updatedAt,
     };
   });
 
-  return { courses: coursesWithStats };
+  return { courses: coursesWithStats, totals: analytics.totals };
+}
+
+// The shared formatter renders 0 as "Free" (course pricing relies on that);
+// earnings of 0 should read as a dollar amount instead.
+function formatEarnings(cents: number) {
+  return cents === 0 ? "$0.00" : formatPrice(cents);
+}
+
+function SummaryTile({
+  icon: Icon,
+  value,
+  label,
+}: {
+  icon: LucideIcon;
+  value: string;
+  label: string;
+}) {
+  return (
+    <Card className="py-4">
+      <CardContent className="flex items-center gap-4">
+        <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <Icon className="size-5" />
+        </div>
+        <div>
+          <div className="text-2xl font-bold leading-none">{value}</div>
+          <div className="mt-1 text-sm text-muted-foreground">{label}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function CourseMetric({
+  icon: Icon,
+  value,
+  label,
+}: {
+  icon: LucideIcon;
+  value: string;
+  label: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <div className="text-sm font-semibold">{value}</div>
+        <div className="text-xs text-muted-foreground">{label}</div>
+      </div>
+    </div>
+  );
 }
 
 function statusBadge(status: string) {
@@ -94,6 +154,19 @@ export function HydrateFallback() {
         </div>
         <Skeleton className="h-10 w-32" />
       </div>
+      <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {Array.from({ length: 2 }).map((_, i) => (
+          <Card key={i} className="py-4">
+            <CardContent className="flex items-center gap-4">
+              <Skeleton className="size-10 rounded-lg" />
+              <div className="space-y-2">
+                <Skeleton className="h-6 w-20" />
+                <Skeleton className="h-4 w-16" />
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
           <Card key={i} className="flex flex-col">
@@ -102,14 +175,16 @@ export function HydrateFallback() {
               <Skeleton className="h-5 w-3/4" />
               <Skeleton className="h-4 w-full" />
             </CardHeader>
-            <CardContent className="flex-1">
-              <div className="flex items-center gap-4">
-                <Skeleton className="h-4 w-20" />
-                <Skeleton className="h-4 w-20" />
+            <CardContent className="flex-1 space-y-4">
+              <Skeleton className="h-4 w-20" />
+              <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-9 w-full" />
+                <Skeleton className="h-9 w-full" />
               </div>
             </CardContent>
-            <CardFooter>
-              <Skeleton className="h-10 w-full" />
+            <CardFooter className="gap-2">
+              <Skeleton className="h-10 flex-1" />
+              <Skeleton className="h-10 flex-1" />
             </CardFooter>
           </Card>
         ))}
@@ -121,7 +196,7 @@ export function HydrateFallback() {
 export default function InstructorDashboard({
   loaderData,
 }: Route.ComponentProps) {
-  const { courses } = loaderData;
+  const { courses, totals } = loaderData;
 
   return (
     <div className="mx-auto max-w-7xl p-6 lg:p-8">
@@ -164,59 +239,91 @@ export default function InstructorDashboard({
           </Link>
         </div>
       ) : (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {courses.map((course) => (
-            <Card key={course.id} className="flex flex-col overflow-hidden pt-0">
-              <Link to={`/courses/${course.slug}`} className="aspect-video overflow-hidden">
-                <CourseImage
-                  src={course.coverImageUrl}
-                  alt={course.title}
-                  className="h-full w-full object-cover transition-transform hover:scale-105"
-                />
-              </Link>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-2">
-                  <Link
-                    to={`/courses/${course.slug}`}
-                    className="text-lg font-semibold leading-tight hover:text-primary"
-                  >
-                    {course.title}
-                  </Link>
-                  {statusBadge(course.status)}
-                </div>
-                <p className="line-clamp-2 text-sm text-muted-foreground">
-                  {course.description}
-                </p>
-              </CardHeader>
-              <CardContent className="flex-1">
-                <div className="flex items-center gap-4 text-sm text-muted-foreground">
-                  <div className="flex items-center gap-1.5">
+        <>
+          <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <SummaryTile
+              icon={Users}
+              value={String(totals.studentCount)}
+              label="Students"
+            />
+            <SummaryTile
+              icon={DollarSign}
+              value={formatEarnings(totals.earningsCents)}
+              label="Earnings"
+            />
+          </div>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {courses.map((course) => (
+              <Card
+                key={course.id}
+                className="flex flex-col overflow-hidden pt-0"
+              >
+                <Link
+                  to={`/courses/${course.slug}`}
+                  className="aspect-video overflow-hidden"
+                >
+                  <CourseImage
+                    src={course.coverImageUrl}
+                    alt={course.title}
+                    className="h-full w-full object-cover transition-transform hover:scale-105"
+                  />
+                </Link>
+                <CardHeader>
+                  <div className="flex items-start justify-between gap-2">
+                    <Link
+                      to={`/courses/${course.slug}`}
+                      className="text-lg font-semibold leading-tight hover:text-primary"
+                    >
+                      {course.title}
+                    </Link>
+                    {statusBadge(course.status)}
+                  </div>
+                  <p className="line-clamp-2 text-sm text-muted-foreground">
+                    {course.description}
+                  </p>
+                </CardHeader>
+                <CardContent className="flex-1 space-y-4">
+                  <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
                     <BookOpen className="size-4" />
                     <span>
                       {course.lessonCount}{" "}
                       {course.lessonCount === 1 ? "lesson" : "lessons"}
                     </span>
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <Users className="size-4" />
-                    <span>
-                      {course.enrollmentCount}{" "}
-                      {course.enrollmentCount === 1 ? "student" : "students"}
-                    </span>
+                  <div className="grid grid-cols-2 gap-3">
+                    <CourseMetric
+                      icon={Users}
+                      value={String(course.studentCount)}
+                      label={course.studentCount === 1 ? "Student" : "Students"}
+                    />
+                    <CourseMetric
+                      icon={DollarSign}
+                      value={formatEarnings(course.earningsCents)}
+                      label="Earnings"
+                    />
                   </div>
-                </div>
-              </CardContent>
-              <CardFooter>
-                <Link to={`/instructor/${course.id}`} className="w-full">
-                  <Button className="w-full" variant="outline">
-                    <BookOpen className="mr-2 size-4" />
-                    Edit Course
-                  </Button>
-                </Link>
-              </CardFooter>
-            </Card>
-          ))}
-        </div>
+                </CardContent>
+                <CardFooter className="gap-2">
+                  <Link to={`/instructor/${course.id}`} className="flex-1">
+                    <Button className="w-full" variant="outline">
+                      <BookOpen className="mr-2 size-4" />
+                      Edit Course
+                    </Button>
+                  </Link>
+                  <Link
+                    to={`/instructor/${course.id}/students`}
+                    className="flex-1"
+                  >
+                    <Button className="w-full" variant="outline">
+                      <Users className="mr-2 size-4" />
+                      View students
+                    </Button>
+                  </Link>
+                </CardFooter>
+              </Card>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
