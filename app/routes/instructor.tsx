@@ -182,9 +182,9 @@ export function HydrateFallback() {
                 <Skeleton className="h-9 w-full" />
               </div>
             </CardContent>
-            <CardFooter className="gap-2">
-              <Skeleton className="h-10 flex-1" />
-              <Skeleton className="h-10 flex-1" />
+            <CardFooter className="flex-col gap-2">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
             </CardFooter>
           </Card>
         ))}
@@ -303,8 +303,8 @@ export default function InstructorDashboard({
                     />
                   </div>
                 </CardContent>
-                <CardFooter className="gap-2">
-                  <Link to={`/instructor/${course.id}`} className="flex-1">
+                <CardFooter className="flex-col gap-2">
+                  <Link to={`/instructor/${course.id}`} className="w-full">
                     <Button className="w-full" variant="outline">
                       <BookOpen className="mr-2 size-4" />
                       Edit Course
@@ -312,7 +312,7 @@ export default function InstructorDashboard({
                   </Link>
                   <Link
                     to={`/instructor/${course.id}/students`}
-                    className="flex-1"
+                    className="w-full"
                   >
                     <Button className="w-full" variant="outline">
                       <Users className="mr-2 size-4" />
