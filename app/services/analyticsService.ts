@@ -9,6 +9,7 @@ import { courses, enrollments, purchases } from "~/db/schema";
 export type CourseStats = {
   studentCount: number;
   earningsCents: number;
+  completionRate: number | null; // 0–1; null when no enrollments
 };
 
 export type InstructorAnalytics = {
@@ -17,7 +18,11 @@ export type InstructorAnalytics = {
 };
 
 function emptyStats(): CourseStats {
-  return { studentCount: 0, earningsCents: 0 };
+  return { studentCount: 0, earningsCents: 0, completionRate: null };
+}
+
+function rate(completed: number, enrolled: number): number | null {
+  return enrolled === 0 ? null : completed / enrolled;
 }
 
 export function getInstructorAnalytics(
@@ -29,10 +34,11 @@ export function getInstructorAnalytics(
     .where(eq(courses.instructorId, instructorId))
     .all();
 
-  const studentCounts = db
+  const enrollmentCounts = db
     .select({
       courseId: enrollments.courseId,
       count: sql<number>`count(*)`,
+      completed: sql<number>`count(${enrollments.completedAt})`,
     })
     .from(enrollments)
     .innerJoin(courses, eq(enrollments.courseId, courses.id))
@@ -55,8 +61,11 @@ export function getInstructorAnalytics(
   for (const course of instructorCourses) {
     byCourse[course.id] = emptyStats();
   }
-  for (const row of studentCounts) {
+  let totalCompleted = 0;
+  for (const row of enrollmentCounts) {
     byCourse[row.courseId].studentCount = row.count;
+    byCourse[row.courseId].completionRate = rate(row.completed, row.count);
+    totalCompleted += row.completed;
   }
   for (const row of earnings) {
     byCourse[row.courseId].earningsCents = row.total;
@@ -67,6 +76,8 @@ export function getInstructorAnalytics(
     totals.studentCount += stats.studentCount;
     totals.earningsCents += stats.earningsCents;
   }
+  // Pooled across all enrollments, not an average of per-course rates.
+  totals.completionRate = rate(totalCompleted, totals.studentCount);
 
   return { totals, byCourse };
 }

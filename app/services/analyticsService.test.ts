@@ -12,7 +12,7 @@ vi.mock("~/db", () => ({
 }));
 
 import { getInstructorAnalytics } from "./analyticsService";
-import { enrollUser } from "./enrollmentService";
+import { enrollUser, markEnrollmentComplete } from "./enrollmentService";
 import { createPurchase, createTeamPurchase } from "./purchaseService";
 import { redeemCoupon } from "./couponService";
 
@@ -59,7 +59,11 @@ describe("analyticsService", () => {
 
       const analytics = getInstructorAnalytics(newInstructor.id);
 
-      expect(analytics.totals).toEqual({ studentCount: 0, earningsCents: 0 });
+      expect(analytics.totals).toEqual({
+        studentCount: 0,
+        earningsCents: 0,
+        completionRate: null,
+      });
       expect(analytics.byCourse).toEqual({});
     });
 
@@ -184,24 +188,77 @@ describe("analyticsService", () => {
       expect(analytics.byCourse[draft.id]).toEqual({
         studentCount: 1,
         earningsCents: 1000,
+        completionRate: 0,
       });
       expect(analytics.byCourse[archived.id]).toEqual({
         studentCount: 1,
         earningsCents: 2500,
+        completionRate: 0,
       });
       expect(analytics.totals).toEqual({
         studentCount: 2,
         earningsCents: 3500,
+        completionRate: 0,
       });
     });
 
-    it("includes courses with no activity as zero entries", () => {
+    it("includes courses with no activity as zero entries with a null completion rate", () => {
       const analytics = getInstructorAnalytics(base.instructor.id);
 
       expect(analytics.byCourse).toEqual({
-        [base.course.id]: { studentCount: 0, earningsCents: 0 },
+        [base.course.id]: {
+          studentCount: 0,
+          earningsCents: 0,
+          completionRate: null,
+        },
       });
-      expect(analytics.totals).toEqual({ studentCount: 0, earningsCents: 0 });
+      expect(analytics.totals).toEqual({
+        studentCount: 0,
+        earningsCents: 0,
+        completionRate: null,
+      });
+    });
+
+    it("computes completion rate per course as completed ÷ enrolled", () => {
+      const secondCourse = createCourse("second", base.instructor.id);
+      const alice = createUser("alice@example.com");
+      const bob = createUser("bob@example.com");
+      const carol = createUser("carol@example.com");
+
+      enrollUser(base.user.id, base.course.id, false, false);
+      enrollUser(alice.id, base.course.id, false, false);
+      enrollUser(bob.id, base.course.id, false, false);
+      enrollUser(carol.id, base.course.id, false, false);
+      markEnrollmentComplete(alice.id, base.course.id);
+      enrollUser(alice.id, secondCourse.id, false, false);
+      enrollUser(bob.id, secondCourse.id, false, false);
+      markEnrollmentComplete(alice.id, secondCourse.id);
+      markEnrollmentComplete(bob.id, secondCourse.id);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      expect(analytics.byCourse[base.course.id].completionRate).toBe(0.25);
+      expect(analytics.byCourse[secondCourse.id].completionRate).toBe(1);
+    });
+
+    it("pools the total completion rate across all enrollments rather than averaging course rates", () => {
+      const bigCourse = createCourse("big", base.instructor.id);
+      const alice = createUser("alice@example.com");
+      const bob = createUser("bob@example.com");
+      const carol = createUser("carol@example.com");
+
+      // Small course: 1 of 1 completed (100%).
+      enrollUser(base.user.id, base.course.id, false, false);
+      markEnrollmentComplete(base.user.id, base.course.id);
+      // Big course: 0 of 3 completed (0%).
+      enrollUser(alice.id, bigCourse.id, false, false);
+      enrollUser(bob.id, bigCourse.id, false, false);
+      enrollUser(carol.id, bigCourse.id, false, false);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      // Pooled: 1 ÷ 4. An average of course rates would give 0.5.
+      expect(analytics.totals.completionRate).toBe(0.25);
     });
   });
 });
