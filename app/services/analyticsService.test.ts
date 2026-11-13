@@ -15,6 +15,9 @@ import { getInstructorAnalytics } from "./analyticsService";
 import { enrollUser, markEnrollmentComplete } from "./enrollmentService";
 import { createPurchase, createTeamPurchase } from "./purchaseService";
 import { redeemCoupon } from "./couponService";
+import { createModule } from "./moduleService";
+import { createLesson } from "./lessonService";
+import { createQuiz, recordAttempt } from "./quizService";
 
 function createUser(email: string, role = schema.UserRole.Student) {
   return testDb
@@ -44,6 +47,12 @@ function createCourse(
     .get();
 }
 
+function createQuizInCourse(courseId: number, title = "Quiz") {
+  const module = createModule(courseId, `${title} module`, null);
+  const lesson = createLesson(module.id, `${title} lesson`, null, null, null, null);
+  return createQuiz(lesson.id, title, 0.7);
+}
+
 describe("analyticsService", () => {
   beforeEach(() => {
     testDb = createTestDb();
@@ -63,6 +72,7 @@ describe("analyticsService", () => {
         studentCount: 0,
         earningsCents: 0,
         completionRate: null,
+        avgQuizScore: null,
       });
       expect(analytics.byCourse).toEqual({});
     });
@@ -189,20 +199,23 @@ describe("analyticsService", () => {
         studentCount: 1,
         earningsCents: 1000,
         completionRate: 0,
+        avgQuizScore: null,
       });
       expect(analytics.byCourse[archived.id]).toEqual({
         studentCount: 1,
         earningsCents: 2500,
         completionRate: 0,
+        avgQuizScore: null,
       });
       expect(analytics.totals).toEqual({
         studentCount: 2,
         earningsCents: 3500,
         completionRate: 0,
+        avgQuizScore: null,
       });
     });
 
-    it("includes courses with no activity as zero entries with a null completion rate", () => {
+    it("includes courses with no activity (and no quizzes) as zero entries with null rates", () => {
       const analytics = getInstructorAnalytics(base.instructor.id);
 
       expect(analytics.byCourse).toEqual({
@@ -210,12 +223,14 @@ describe("analyticsService", () => {
           studentCount: 0,
           earningsCents: 0,
           completionRate: null,
+          avgQuizScore: null,
         },
       });
       expect(analytics.totals).toEqual({
         studentCount: 0,
         earningsCents: 0,
         completionRate: null,
+        avgQuizScore: null,
       });
     });
 
@@ -259,6 +274,72 @@ describe("analyticsService", () => {
 
       // Pooled: 1 ÷ 4. An average of course rates would give 0.5.
       expect(analytics.totals.completionRate).toBe(0.25);
+    });
+
+    it("averages each student's best score per quiz, so retries don't drag it down", () => {
+      const quizA = createQuizInCourse(base.course.id, "A");
+      const quizB = createQuizInCourse(base.course.id, "B");
+      const alice = createUser("alice@example.com");
+
+      // base.user on quiz A: 0.4 then 0.9 → best 0.9
+      recordAttempt(base.user.id, quizA.id, 0.4, false);
+      recordAttempt(base.user.id, quizA.id, 0.9, true);
+      // alice on quiz A: 0.6 then 0.5 → best 0.6
+      recordAttempt(alice.id, quizA.id, 0.6, false);
+      recordAttempt(alice.id, quizA.id, 0.5, false);
+      // alice on quiz B: 0.3 → best 0.3
+      recordAttempt(alice.id, quizB.id, 0.3, false);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      // (0.9 + 0.6 + 0.3) / 3 pairs
+      expect(analytics.byCourse[base.course.id].avgQuizScore).toBeCloseTo(0.6);
+    });
+
+    it("returns a null quiz score for a course whose quizzes have no attempts", () => {
+      createQuizInCourse(base.course.id);
+      enrollUser(base.user.id, base.course.id, false, false);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      expect(analytics.byCourse[base.course.id].avgQuizScore).toBeNull();
+      expect(analytics.totals.avgQuizScore).toBeNull();
+    });
+
+    it("pools the total quiz score across all best scores rather than averaging course averages", () => {
+      const bigCourse = createCourse("big", base.instructor.id);
+      const smallQuiz = createQuizInCourse(base.course.id, "Small");
+      const bigQuiz = createQuizInCourse(bigCourse.id, "Big");
+      const alice = createUser("alice@example.com");
+      const bob = createUser("bob@example.com");
+      const carol = createUser("carol@example.com");
+
+      // Small course: one best score of 1.0.
+      recordAttempt(base.user.id, smallQuiz.id, 1, true);
+      // Big course: three best scores of 0.2.
+      recordAttempt(alice.id, bigQuiz.id, 0.2, false);
+      recordAttempt(bob.id, bigQuiz.id, 0.2, false);
+      recordAttempt(carol.id, bigQuiz.id, 0.2, false);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      expect(analytics.byCourse[base.course.id].avgQuizScore).toBeCloseTo(1);
+      expect(analytics.byCourse[bigCourse.id].avgQuizScore).toBeCloseTo(0.2);
+      // Pooled: (1.0 + 0.2 × 3) / 4 = 0.4. Averaging course averages would give 0.6.
+      expect(analytics.totals.avgQuizScore).toBeCloseTo(0.4);
+    });
+
+    it("returns a null quiz score for a course with no quizzes, without affecting the total", () => {
+      const noQuizCourse = createCourse("no-quiz", base.instructor.id);
+      const quiz = createQuizInCourse(base.course.id);
+      enrollUser(base.user.id, noQuizCourse.id, false, false);
+      recordAttempt(base.user.id, quiz.id, 0.8, true);
+
+      const analytics = getInstructorAnalytics(base.instructor.id);
+
+      expect(analytics.byCourse[noQuizCourse.id].avgQuizScore).toBeNull();
+      expect(analytics.byCourse[base.course.id].avgQuizScore).toBeCloseTo(0.8);
+      expect(analytics.totals.avgQuizScore).toBeCloseTo(0.8);
     });
   });
 });

@@ -1,6 +1,14 @@
 import { eq, sql } from "drizzle-orm";
 import { db } from "~/db";
-import { courses, enrollments, purchases } from "~/db/schema";
+import {
+  courses,
+  enrollments,
+  lessons,
+  modules,
+  purchases,
+  quizAttempts,
+  quizzes,
+} from "~/db/schema";
 
 // ─── Analytics Service ───
 // Aggregated instructor-facing metrics across an instructor's courses.
@@ -10,6 +18,7 @@ export type CourseStats = {
   studentCount: number;
   earningsCents: number;
   completionRate: number | null; // 0–1; null when no enrollments
+  avgQuizScore: number | null; // 0–1; null when no quiz attempts
 };
 
 export type InstructorAnalytics = {
@@ -18,11 +27,17 @@ export type InstructorAnalytics = {
 };
 
 function emptyStats(): CourseStats {
-  return { studentCount: 0, earningsCents: 0, completionRate: null };
+  return {
+    studentCount: 0,
+    earningsCents: 0,
+    completionRate: null,
+    avgQuizScore: null,
+  };
 }
 
-function rate(completed: number, enrolled: number): number | null {
-  return enrolled === 0 ? null : completed / enrolled;
+// numerator ÷ denominator, or null when there is nothing to measure.
+function ratioOrNull(numerator: number, denominator: number): number | null {
+  return denominator === 0 ? null : numerator / denominator;
 }
 
 export function getInstructorAnalytics(
@@ -57,6 +72,31 @@ export function getInstructorAnalytics(
     .groupBy(purchases.courseId)
     .all();
 
+  // One row per (student, quiz) pair: that student's best score on that quiz.
+  const bestScores = db
+    .select({
+      courseId: modules.courseId,
+      best: sql<number>`max(${quizAttempts.score})`.as("best"),
+    })
+    .from(quizAttempts)
+    .innerJoin(quizzes, eq(quizAttempts.quizId, quizzes.id))
+    .innerJoin(lessons, eq(quizzes.lessonId, lessons.id))
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .innerJoin(courses, eq(modules.courseId, courses.id))
+    .where(eq(courses.instructorId, instructorId))
+    .groupBy(quizAttempts.userId, quizAttempts.quizId, modules.courseId)
+    .as("best_scores");
+
+  const quizScores = db
+    .select({
+      courseId: bestScores.courseId,
+      scoreSum: sql<number>`sum(${bestScores.best})`,
+      pairCount: sql<number>`count(*)`,
+    })
+    .from(bestScores)
+    .groupBy(bestScores.courseId)
+    .all();
+
   const byCourse: Record<number, CourseStats> = {};
   for (const course of instructorCourses) {
     byCourse[course.id] = emptyStats();
@@ -64,11 +104,22 @@ export function getInstructorAnalytics(
   let totalCompleted = 0;
   for (const row of enrollmentCounts) {
     byCourse[row.courseId].studentCount = row.count;
-    byCourse[row.courseId].completionRate = rate(row.completed, row.count);
+    byCourse[row.courseId].completionRate = ratioOrNull(row.completed, row.count);
     totalCompleted += row.completed;
   }
   for (const row of earnings) {
     byCourse[row.courseId].earningsCents = row.total;
+  }
+
+  let totalScoreSum = 0;
+  let totalPairCount = 0;
+  for (const row of quizScores) {
+    byCourse[row.courseId].avgQuizScore = ratioOrNull(
+      row.scoreSum,
+      row.pairCount
+    );
+    totalScoreSum += row.scoreSum;
+    totalPairCount += row.pairCount;
   }
 
   const totals = emptyStats();
@@ -76,8 +127,10 @@ export function getInstructorAnalytics(
     totals.studentCount += stats.studentCount;
     totals.earningsCents += stats.earningsCents;
   }
-  // Pooled across all enrollments, not an average of per-course rates.
-  totals.completionRate = rate(totalCompleted, totals.studentCount);
+  // Pooled across all enrollments / (student, quiz) pairs, not an average of
+  // per-course values.
+  totals.completionRate = ratioOrNull(totalCompleted, totals.studentCount);
+  totals.avgQuizScore = ratioOrNull(totalScoreSum, totalPairCount);
 
   return { totals, byCourse };
 }

@@ -11,6 +11,7 @@ import {
   AlertTriangle,
   BookOpen,
   CircleCheck,
+  ClipboardCheck,
   DollarSign,
   GraduationCap,
   Plus,
@@ -76,9 +77,10 @@ function formatEarnings(cents: number) {
   return cents === 0 ? "$0.00" : formatPrice(cents);
 }
 
-// Rates are 0–1; null means nothing to measure, shown as "—" rather than 0%.
-function formatRate(rate: number | null) {
-  return rate === null ? "—" : `${Math.round(rate * 100)}%`;
+// Rates and scores are 0–1; null means nothing to measure, shown as "—"
+// rather than 0%.
+function formatPercent(fraction: number | null) {
+  return fraction === null ? "—" : `${Math.round(fraction * 100)}%`;
 }
 
 function SummaryTile({
@@ -161,7 +163,7 @@ export function HydrateFallback() {
         <Skeleton className="h-10 w-32" />
       </div>
       <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {Array.from({ length: 3 }).map((_, i) => (
+        {Array.from({ length: 4 }).map((_, i) => (
           <Card key={i} className="py-4">
             <CardContent className="flex items-center gap-4">
               <Skeleton className="size-10 rounded-lg" />
@@ -184,6 +186,7 @@ export function HydrateFallback() {
             <CardContent className="flex-1 space-y-4">
               <Skeleton className="h-4 w-20" />
               <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-9 w-full" />
                 <Skeleton className="h-9 w-full" />
                 <Skeleton className="h-9 w-full" />
                 <Skeleton className="h-9 w-full" />
@@ -260,8 +263,13 @@ export default function InstructorDashboard({
             />
             <SummaryTile
               icon={CircleCheck}
-              value={formatRate(totals.completionRate)}
+              value={formatPercent(totals.completionRate)}
               label="Completion rate"
+            />
+            <SummaryTile
+              icon={ClipboardCheck}
+              value={formatPercent(totals.avgQuizScore)}
+              label="Avg. quiz score"
             />
           </div>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
@@ -315,8 +323,13 @@ export default function InstructorDashboard({
                     />
                     <CourseMetric
                       icon={CircleCheck}
-                      value={formatRate(course.completionRate)}
+                      value={formatPercent(course.completionRate)}
                       label="Completion rate"
+                    />
+                    <CourseMetric
+                      icon={ClipboardCheck}
+                      value={formatPercent(course.avgQuizScore)}
+                      label="Avg. quiz score"
                     />
                   </div>
                 </CardContent>
